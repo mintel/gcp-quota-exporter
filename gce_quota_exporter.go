@@ -63,7 +63,7 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 	prometheus.DescribeByCollect(e, ch)
 }
 
-// Collect is blah blah blah.
+// Collect will run each time the exporter is polled and will in turn call the Google API for the required statistics.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
