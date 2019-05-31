@@ -1,4 +1,4 @@
-module github.com/mintel/gce_quota_exporter
+module github.com/mintel/gcp-quota-exporter
 
 go 1.12
 
