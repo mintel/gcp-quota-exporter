@@ -11,3 +11,5 @@ services:
     command: "--gce.project-id myproject"
     ports:
       - "9592:9592"
+    volumes:
+      - "./credentials.json:/app/credentials.json"

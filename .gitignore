@@ -1,4 +1,6 @@
 .idea/
-.vscode
+.vscode/
 credentials.json
 debug
+docker-compose.yml
+gce_quota_exporter

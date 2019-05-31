@@ -7,11 +7,26 @@
 ./gce_quota_exporter --gce.project-id myproject
 ```
 
+## Docker-compose
+
+1. Copy the example file and add your project id to it
+```
+cp docker-compose.yml.example docker-compose.yml
+```
+1. Change the volume to point to your credentials file if different
+1. Run `docker-compose up` and you'll have a prometheus instance running at http://localhost:9090 and a gce_quota_exporter instance running at http://localhost:9592.
+
 ## Docker
 
-Add your project name to `docker-compose.yml` and run `docker-compose up` and you'll have a prometheus instance running at http://localhost:9090 and a gce_quota_exporter instance running at http://localhost:9592. Or for just an exporter instance (again at http://localhost:9592):
+### Local Build
 
 ```
 docker build -t gce_quota_exporter .
-docker run -it --rm gce_quota_exporter --gce.project-id myproject
+docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json gce_quota_exporter --gce.project-id myproject
+```
+
+### Official Build
+
+```
+docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json mintel/gce_quota_exporter --gce.project-id myproject
 ```

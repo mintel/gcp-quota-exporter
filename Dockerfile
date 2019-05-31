@@ -1,18 +1,19 @@
-FROM golang
+FROM golang:1.12.5-alpine3.9 as alpine
 
-RUN go get -u -v \
-    github.com/prometheus/client_golang/prometheus \
-	github.com/prometheus/client_golang/prometheus/promhttp \
-	github.com/prometheus/common/log \
-	github.com/prometheus/common/version \
-	google.golang.org/api/compute/v1 \
-	google.golang.org/api/option \
-	gopkg.in/alecthomas/kingpin.v2
+RUN apk add --no-cache git ca-certificates
 
-EXPOSE 9592
+ENV GO111MODULE=on
+WORKDIR /app
+COPY go.mod .
+COPY go.sum .
+RUN go mod download
 
-WORKDIR /go/src/app
 COPY . .
-RUN go install -v .
+RUN CGO_ENABLED=0 GOOS=linux go build .
 
-ENTRYPOINT ["app"]
+FROM scratch
+COPY --from=alpine /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+COPY --from=alpine /app/gce_quota_exporter /app/
+WORKDIR /app
+EXPOSE 9592
+ENTRYPOINT ["./gce_quota_exporter"]
