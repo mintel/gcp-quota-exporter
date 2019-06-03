@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build .
 
 FROM scratch
 COPY --from=alpine /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=alpine /app/gce_quota_exporter /app/
+COPY --from=alpine /app/gcp-quota-exporter /app/
 WORKDIR /app
 EXPOSE 9592
-ENTRYPOINT ["./gce_quota_exporter"]
+ENTRYPOINT ["./gcp-quota-exporter"]

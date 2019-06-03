@@ -16,12 +16,12 @@ import (
 )
 
 const (
-	namespace = "gce_quota"
+	namespace = "gcp_quota"
 )
 
 var (
-	limitDesc = prometheus.NewDesc("gce_quota_limit", "quota limits for GCE components", []string{"project", "region", "metric"}, nil)
-	usageDesc = prometheus.NewDesc("gce_quota_usage", "quota usage for GCE components", []string{"project", "region", "metric"}, nil)
+	limitDesc = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
+	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
 )
 
 // Exporter collects quota stats from the Google Compute API and exports them using the Prometheus metrics package.
@@ -97,34 +97,35 @@ func main() {
 
 	var (
 		// Default port added to https://github.com/prometheus/prometheus/wiki/Default-port-allocations
+		gcpProjectID = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").Required().String()
+		//gcpServices    = kingpin.Arg("gcp_services", "Comma-separated list of service names to monitor as per `gcloud services list | awk '{print $1}' | sed 's/\\.googleapis\\.com//g'`)").Required().String()
 		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
-		gceCredentials = kingpin.Flag("gce.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
-		gceProjectID   = kingpin.Flag("gce.project-id", "ID of Google Project to be monitored.").Required().String()
+		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
-	kingpin.Version(version.Print("gce_quota_exporter"))
+	kingpin.Version(version.Print("gcp_quota_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	log.Infoln("Starting gce_quota_exporter", version.Info())
+	log.Infoln("Starting gcp_quota_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
-	exporter, err := NewExporter(*gceCredentials, *gceProjectID)
+	exporter, err := NewExporter(*gcpCredentials, *gcpProjectID)
 	if err != nil {
 		log.Fatal(err)
 	}
 	prometheus.MustRegister(exporter)
-	prometheus.MustRegister(version.NewCollector("gce_quota_exporter"))
+	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
 	log.Infoln("Listening on", *listenAddress)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
-             <head><title>GCE Quota Exporter</title></head>
+             <head><title>GCP Quota Exporter</title></head>
              <body>
-             <h1>GCE Quota Exporter</h1>
+             <h1>GCP Quota Exporter</h1>
              <p><a href='` + *metricsPath + `'>Metrics</a></p>
              </body>
              </html>`))
