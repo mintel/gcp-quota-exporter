@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"io/ioutil"
+	"math/rand"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -24,6 +26,13 @@ var (
 	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
 )
 
+func backoff(seconds time.Duration) {
+	millis := time.Duration(rand.Int31n(1000)) * time.Millisecond
+	time.Sleep(seconds + millis)
+	wait := seconds * 2
+	return wait
+}
+
 // Exporter collects quota stats from the Google Compute API and exports them using the Prometheus metrics package.
 type Exporter struct {
 	service *compute.Service
@@ -33,9 +42,18 @@ type Exporter struct {
 
 // Get Project-specific quotas
 func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
-	project, err := e.service.Projects.Get(e.project).Do()
-	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
+
+	var project *compute.Project
+	var err error
+
+	wait := 1 * time.Second
+	for {
+		project, err = e.service.Projects.Get(e.project).Do()
+		if err == nil {
+			break
+		} else {
+			wait = backoff(wait)
+		}
 	}
 	for _, quota := range project.Quotas {
 		ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
