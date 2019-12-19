@@ -32,22 +32,23 @@ type Exporter struct {
 }
 
 // Get Project-specific quotas
-func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
+func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) error {
 	project, err := e.service.Projects.Get(e.project).Do()
 	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
+		return err
 	}
 	for _, quota := range project.Quotas {
 		ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
 		ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, "", quota.Metric)
 	}
+	return nil
 }
 
 // Get Region-specific quotas
-func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
+func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) error {
 	regionList, err := e.service.Regions.List(e.project).Do()
 	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
+		return err
 	}
 	for _, region := range regionList.Items {
 		regionName := region.Name
@@ -56,6 +57,7 @@ func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, regionName, quota.Metric)
 		}
 	}
+	return nil
 }
 
 // Describe is implemented with DescribeByCollect. That's possible because the Collect method will always return the same metrics with the same descriptors.
@@ -65,10 +67,19 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect will run each time the exporter is polled and will in turn call the Google API for the required statistics.
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	e.mutex.Lock()
+	e.mutex.Lock() // To protect metrics from concurrent collects.
 	defer e.mutex.Unlock()
-	e.getProjectQuotas(ch)
-	e.getRegionQuotas(ch)
+
+	err := e.getProjectQuotas(ch)
+	if err != nil {
+		log.Errorf("Unable to query API: %v", err)
+		return
+	}
+	err = e.getRegionQuotas(ch)
+	if err != nil {
+		log.Errorf("Unable to query API: %v", err)
+		return
+	}
 }
 
 // NewExporter returns an initialised Exporter.
