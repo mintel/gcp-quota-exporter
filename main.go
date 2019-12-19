@@ -17,27 +17,17 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
-const (
-	namespace = "gcp_quota"
-)
-
 var (
 	limitDesc = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
 	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
 )
 
-func backoff(seconds time.Duration) {
-	millis := time.Duration(rand.Int31n(1000)) * time.Millisecond
-	time.Sleep(seconds + millis)
-	wait := seconds * 2
-	return wait
-}
-
 // Exporter collects quota stats from the Google Compute API and exports them using the Prometheus metrics package.
 type Exporter struct {
-	service *compute.Service
-	project string
-	mutex   sync.RWMutex
+	service      *compute.Service
+	project      string
+	mutex        sync.RWMutex
+	backoffLimit int
 }
 
 // Get Project-specific quotas
@@ -45,15 +35,20 @@ func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
 
 	var project *compute.Project
 	var err error
+	var millis time.Duration
 
-	wait := 1 * time.Second
-	for {
+	for n := 0; n <= e.backoffLimit-1; n++ {
 		project, err = e.service.Projects.Get(e.project).Do()
 		if err == nil {
 			break
 		} else {
-			wait = backoff(wait)
+			log.Errorf("Unable to query API: %v. Retrying (%v / %v).", err, n+1, e.backoffLimit)
+			millis = time.Duration(rand.Int31n(1000)) * time.Millisecond
+			time.Sleep(time.Duration(2^n) + millis)
 		}
+	}
+	if err != nil {
+		log.Fatal()
 	}
 	for _, quota := range project.Quotas {
 		ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
@@ -63,9 +58,23 @@ func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
 
 // Get Region-specific quotas
 func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
-	regionList, err := e.service.Regions.List(e.project).Do()
+
+	var regionList *compute.RegionList
+	var err error
+	var millis time.Duration
+
+	for n := 0; n <= e.backoffLimit-1; n++ {
+		regionList, err = e.service.Regions.List(e.project).Do()
+		if err == nil {
+			break
+		} else {
+			log.Errorf("Unable to query API: %v. Retrying (%v / %v).", err, n+1, e.backoffLimit)
+			millis = time.Duration(rand.Int31n(1000)) * time.Millisecond
+			time.Sleep(time.Duration(2^n) + millis)
+		}
+	}
 	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
+		log.Fatal()
 	}
 	for _, region := range regionList.Items {
 		regionName := region.Name
@@ -90,7 +99,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewExporter returns an initialised Exporter.
-func NewExporter(credfile string, project string) (*Exporter, error) {
+func NewExporter(credfile string, project string, backoffLimit int) (*Exporter, error) {
 
 	// Read credentials from JSON file into a byte array
 	var credentials, err = ioutil.ReadFile(credfile)
@@ -106,8 +115,9 @@ func NewExporter(credfile string, project string) (*Exporter, error) {
 	}
 
 	return &Exporter{
-		service: computeService,
-		project: project,
+		service:      computeService,
+		project:      project,
+		backoffLimit: backoffLimit,
 	}, nil
 }
 
@@ -120,6 +130,7 @@ func main() {
 		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
+		backoffLimit   = kingpin.Flag("backoff-limit", "How many times the app will retry API connections when an error response is recieved from Google.").Default("13").Int()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
@@ -127,10 +138,10 @@ func main() {
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	log.Infoln("Starting gcp_quota_exporter", version.Info())
+	log.Infoln("Starting gcp-quota-exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
-	exporter, err := NewExporter(*gcpCredentials, *gcpProjectID)
+	exporter, err := NewExporter(*gcpCredentials, *gcpProjectID, *backoffLimit)
 	if err != nil {
 		log.Fatal(err)
 	}
