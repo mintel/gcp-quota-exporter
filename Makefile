@@ -3,7 +3,7 @@ build : gcp-quota-exporter
 
 gcp-quota-exporter : main.go
 	@echo "building go binary"
-	@GOOS=linux go build -o ./gcp-quota-exporter .
+	@CGO_ENABLED=0 GOOS=linux go build .
 
 .PHONY : unit-test
 unit-test :

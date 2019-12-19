@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io/ioutil"
+	"math"
 	"math/rand"
 	"net/http"
 	"sync"
@@ -35,7 +36,6 @@ func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
 
 	var project *compute.Project
 	var err error
-	var millis time.Duration
 
 	for n := 0; n <= e.backoffLimit-1; n++ {
 		project, err = e.service.Projects.Get(e.project).Do()
@@ -43,8 +43,11 @@ func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
 			break
 		} else {
 			log.Errorf("Unable to query API: %v. Retrying (%v / %v).", err, n+1, e.backoffLimit)
-			millis = time.Duration(rand.Int31n(1000)) * time.Millisecond
-			time.Sleep(time.Duration(2^n) + millis)
+			ms := rand.Intn(1000)
+			secs := int(math.Pow(2, float64(n)))
+			wait := time.Duration(secs) * time.Second + time.Duration(ms) * time.Millisecond
+			log.Infof("%v", wait)
+			time.Sleep(wait)
 		}
 	}
 	if err != nil {
@@ -61,7 +64,6 @@ func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
 
 	var regionList *compute.RegionList
 	var err error
-	var millis time.Duration
 
 	for n := 0; n <= e.backoffLimit-1; n++ {
 		regionList, err = e.service.Regions.List(e.project).Do()
@@ -69,8 +71,11 @@ func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
 			break
 		} else {
 			log.Errorf("Unable to query API: %v. Retrying (%v / %v).", err, n+1, e.backoffLimit)
-			millis = time.Duration(rand.Int31n(1000)) * time.Millisecond
-			time.Sleep(time.Duration(2^n) + millis)
+			ms := rand.Intn(1000)
+			secs := int(math.Pow(2, float64(n)))
+			wait := time.Duration(secs) * time.Second + time.Duration(ms) * time.Millisecond
+			log.Infof("%v", wait)
+			time.Sleep(wait)
 		}
 	}
 	if err != nil {
@@ -130,7 +135,7 @@ func main() {
 		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
-		backoffLimit   = kingpin.Flag("backoff-limit", "How many times the app will retry API connections when an error response is recieved from Google.").Default("13").Int()
+		backoffLimit   = kingpin.Flag("backoff-limit", "How many times the app will retry API connections when an error response is recieved from Google.").Default("12").Int()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
