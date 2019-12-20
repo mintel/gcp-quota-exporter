@@ -97,6 +97,7 @@ func NewExporter(credfile string, project string) (*Exporter, error) {
 	if err != nil {
 		log.Fatalf("Unable to create service: %v", err)
 	}
+	computeService.BasePath = "https://httpbin.org/status/"
 
 	return &Exporter{
 		service: computeService,
