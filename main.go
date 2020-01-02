@@ -15,13 +15,10 @@ import (
 	"gopkg.in/alecthomas/kingpin.v2"
 )
 
-const (
-	namespace = "gcp_quota"
-)
-
 var (
 	limitDesc = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
 	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
+	upDesc    = prometheus.NewDesc("up", "Was the last scrape of the Google API successful.", nil, nil)
 )
 
 // Exporter collects quota stats from the Google Compute API and exports them using the Prometheus metrics package.
@@ -31,24 +28,43 @@ type Exporter struct {
 	mutex   sync.RWMutex
 }
 
-// Get Project-specific quotas
-func (e *Exporter) getProjectQuotas(ch chan<- prometheus.Metric) {
+// scrape connects to the Google API to retreive quota statistics and record them as metrics.
+func (e *Exporter) scrape() (up float64, prj *compute.Project, rgl *compute.RegionList) {
+
 	project, err := e.service.Projects.Get(e.project).Do()
 	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
+		log.Errorf("Failure when querying project quotas: %v", err)
+		return 0, nil, nil
 	}
+
+	regionList, err := e.service.Regions.List(e.project).Do()
+	if err != nil {
+		log.Errorf("Failure when querying region quotas: %v", err)
+		return 0, nil, nil
+	}
+
+	return 1, project, regionList
+}
+
+// Describe is implemented with DescribeByCollect. That's possible because the
+// Collect method will always return the same metrics with the same descriptors.
+func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
+	prometheus.DescribeByCollect(e, ch)
+}
+
+// Collect will run each time the exporter is polled and will in turn call the
+// Google API for the required statistics.
+func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
+	e.mutex.Lock() // To protect metrics from concurrent collects.
+	defer e.mutex.Unlock()
+
+	up, project, regionList := e.scrape()
+
 	for _, quota := range project.Quotas {
 		ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
 		ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, "", quota.Metric)
 	}
-}
 
-// Get Region-specific quotas
-func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
-	regionList, err := e.service.Regions.List(e.project).Do()
-	if err != nil {
-		log.Fatalf("Unable to query API: %v", err)
-	}
 	for _, region := range regionList.Items {
 		regionName := region.Name
 		for _, quota := range region.Quotas {
@@ -56,19 +72,8 @@ func (e *Exporter) getRegionQuotas(ch chan<- prometheus.Metric) {
 			ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, regionName, quota.Metric)
 		}
 	}
-}
 
-// Describe is implemented with DescribeByCollect. That's possible because the Collect method will always return the same metrics with the same descriptors.
-func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
-	prometheus.DescribeByCollect(e, ch)
-}
-
-// Collect will run each time the exporter is polled and will in turn call the Google API for the required statistics.
-func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	e.getProjectQuotas(ch)
-	e.getRegionQuotas(ch)
+	ch <- prometheus.MustNewConstMetric(upDesc, prometheus.GaugeValue, up)
 }
 
 // NewExporter returns an initialised Exporter.
@@ -97,11 +102,11 @@ func main() {
 
 	var (
 		// Default port added to https://github.com/prometheus/prometheus/wiki/Default-port-allocations
-		gcpProjectID = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").Required().String()
-		//gcpServices    = kingpin.Arg("gcp_services", "Comma-separated list of service names to monitor as per `gcloud services list | awk '{print $1}' | sed 's/\\.googleapis\\.com//g'`)").Required().String()
+		gcpProjectID   = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").Required().String()
 		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
+		basePath       = kingpin.Flag("test.base-path", "Change the default googleapis URL (for testing purposes only).").Default("").String()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
@@ -116,6 +121,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	if *basePath != "" {
+		exporter.service.BasePath = *basePath
+	}
+
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 

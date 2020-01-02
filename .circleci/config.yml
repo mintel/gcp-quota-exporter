@@ -1,0 +1,20 @@
+version: 2.1
+
+jobs:
+  gofmt:
+    docker:
+    - image: circleci/golang
+    steps:
+    - checkout
+    - run:
+        name: gofmt
+        command: |
+          set -x
+          output=$(gofmt -l -e -d .)
+          echo $output
+          test -z $output
+workflows:
+  version: 2
+  ci:
+    jobs:
+    - gofmt
