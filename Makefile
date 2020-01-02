@@ -1,4 +1,4 @@
-SHELL := /bin/bash
+SHELL := /bin/sh
 
 BINARY_NAME ?= gcp-quota-exporter
 DOCKER_REGISTRY ?= mintel
