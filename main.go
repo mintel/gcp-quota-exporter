@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io/ioutil"
 	"net/http"
 	"sync"
@@ -26,6 +27,11 @@ type Exporter struct {
 	service *compute.Service
 	project string
 	mutex   sync.RWMutex
+}
+
+// GCP service accounts contain the project id
+type ServiceAccount struct {
+	ProjectId string `json:"project_id"`
 }
 
 // scrape connects to the Google API to retreive quota statistics and record them as metrics.
@@ -102,7 +108,7 @@ func main() {
 
 	var (
 		// Default port added to https://github.com/prometheus/prometheus/wiki/Default-port-allocations
-		gcpProjectID   = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").Required().String()
+		gcpProjectID   = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").String()
 		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
@@ -117,6 +123,26 @@ func main() {
 	log.Infoln("Starting gcp_quota_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
+	if *gcpProjectID == "" {
+		var svcAcct ServiceAccount
+
+		serviceContent, err := ioutil.ReadFile(*gcpCredentials)
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		err = json.Unmarshal([]byte(serviceContent), &svcAcct)
+		if err != nil {
+			log.Fatalf("Unable to parse file: %v", err)
+		}
+
+		if svcAcct.ProjectId == "" {
+			log.Fatalf("Unable to parse project_id from %s", *gcpCredentials)
+		}
+
+		*gcpProjectID = svcAcct.ProjectId
+	}
+
 	exporter, err := NewExporter(*gcpCredentials, *gcpProjectID)
 	if err != nil {
 		log.Fatal(err)
@@ -130,6 +156,7 @@ func main() {
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
 	log.Infoln("Listening on", *listenAddress)
+	log.Infoln("GCP Project: ", *gcpProjectID)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
