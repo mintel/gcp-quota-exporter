@@ -1,4 +1,4 @@
-FROM golang:1.12.5-alpine3.9 as alpine
+FROM golang:1.13-alpine as alpine
 
 RUN apk add --no-cache git ca-certificates make
 
