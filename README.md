@@ -5,13 +5,14 @@ Exports limits and usage for metrics available through the GCP APIs (currently o
 ## Usage
 
 1. Set up a service account in the project you wish to monitor. The account should be given the following permissions:
-   * compute.projects.get
-   * compute.regions.list
-1. Create a key for the service account and save as a JSON somewhere (by default the exporter will look for `./credentials.json`)
-1. Run it and provide a project name:
-```bash
-./gcp-quota-exporter myproject
-```
+  * compute.projects.get
+  * compute.regions.list
+1. Authentication is performed using the standard [Application Default Credentials](https://developers.google.com/accounts/docs/application-default-credentials)
+  * To use a credentials.json key file export the environment variable `GOOGLE_APPLICATION_CREDENTIALS=path-to-credentials.json`
+1. The exporter need to know which project to monitor quotas for
+  * Specify project using `--gcp.project_id`  
+  * Export environment variable `GOOGLE_PROJECT_ID`
+  * Fetch from compute metadata `http://metadata.google.internal/computeMetadata/v1/project/project-id`
 
 ## Docker-compose
 
@@ -25,11 +26,11 @@ Exports limits and usage for metrics available through the GCP APIs (currently o
 
 ```
 docker build -t gcp-quota-exporter .
-docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json gcp-quota-exporter myproject
+docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json -e GOOGLE_PROJECT_ID=project_id gcp-quota-exporter
 ```
 
 ### Official Build
 
 ```
-docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json mintel/gcp-quota-exporter myproject
+docker run -it --rm -v $(pwd)/credentials.json:/app/credentials.json -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json -e GOOGLE_PROJECT_ID=project_id mintel/gcp-quota-exporter
 ```

@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
-	"io/ioutil"
+	"fmt"
 	"net/http"
 	"sync"
 
+	"cloud.google.com/go/compute/metadata"
+	"github.com/PuerkitoBio/rehttp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/prometheus/common/log"
 	"github.com/prometheus/common/version"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -19,6 +22,30 @@ var (
 	limitDesc = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
 	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
 	upDesc    = prometheus.NewDesc("up", "Was the last scrape of the Google API successful.", nil, nil)
+
+	gcpProjectID = kingpin.Flag(
+		"gcp.project_id", "ID of the Google Project to be monitored. ($GOOGLE_PROJECT_ID)",
+	).Envar("GOOGLE_PROJECT_ID").String()
+
+	gcpMaxRetries = kingpin.Flag(
+		"gcp.max-retries", "Max number of retries that should be attempted on 503 errors from gcp. ($GCP_EXPORTER_MAX_RETRIES)",
+	).Envar("GCP_EXPORTER_MAX_RETRIES").Default("0").Int()
+
+	gcpHttpTimeout = kingpin.Flag(
+		"gcp.http-timeout", "How long should gcp_exporter wait for a result from the Google API ($GCP_EXPORTER_HTTP_TIMEOUT)",
+	).Envar("GCP_EXPORTER_HTTP_TIMEOUT").Default("10s").Duration()
+
+	gcpMaxBackoffDuration = kingpin.Flag(
+		"gcp.max-backoff", "Max time between each request in an exp backoff scenario ($GCP_EXPORTER_MAX_BACKOFF_DURATION)",
+	).Envar("GCP_EXPORTER_MAX_BACKOFF_DURATION").Default("5s").Duration()
+
+	gcpBackoffJitterBase = kingpin.Flag(
+		"gcp.backoff-jitter", "The amount of jitter to introduce in a exp backoff scenario ($GCP_EXPORTER_BACKODFF_JITTER_BASE)",
+	).Envar("GCP_EXPORTER_BACKOFF_JITTER_BASE").Default("1s").Duration()
+
+	gcpRetryStatuses = kingpin.Flag(
+		"gcp.retry-statuses", "The HTTP statuses that should trigger a retry ($GCP_EXPORTER_RETRY_STATUSES)",
+	).Envar("GCP_EXPORTER_RETRY_STATUSES").Default("503").Ints()
 )
 
 // Exporter collects quota stats from the Google Compute API and exports them using the Prometheus metrics package.
@@ -77,17 +104,25 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewExporter returns an initialised Exporter.
-func NewExporter(credfile string, project string) (*Exporter, error) {
-
-	// Read credentials from JSON file into a byte array
-	var credentials, err = ioutil.ReadFile(credfile)
-	if err != nil {
-		log.Fatalf("Unable to read credentials file: %v", err)
-	}
-
+func NewExporter(project string) (*Exporter, error) {
 	// Create context and generate compute.Service
 	ctx := context.Background()
-	computeService, err := compute.NewService(ctx, option.WithCredentialsJSON(credentials))
+
+	googleClient, err := google.DefaultClient(ctx, compute.ComputeReadonlyScope)
+	if err != nil {
+		return nil, fmt.Errorf("Error creating Google client: %v", err)
+	}
+
+	googleClient.Timeout = *gcpHttpTimeout
+	googleClient.Transport = rehttp.NewTransport(
+		googleClient.Transport, // need to wrap DefaultClient transport
+		rehttp.RetryAll(
+			rehttp.RetryMaxRetries(*gcpMaxRetries),
+			rehttp.RetryStatuses(*gcpRetryStatuses...)), // Cloud support suggests retrying on 503 errors
+		rehttp.ExpJitterDelay(*gcpBackoffJitterBase, *gcpMaxBackoffDuration), // Set timeout to <10s as that is prom default timeout
+	)
+
+	computeService, err := compute.NewService(ctx, option.WithHTTPClient(googleClient))
 	if err != nil {
 		log.Fatalf("Unable to create service: %v", err)
 	}
@@ -98,15 +133,23 @@ func NewExporter(credfile string, project string) (*Exporter, error) {
 	}, nil
 }
 
+func GetProjectIdFromMetadata() (string, error) {
+	client := metadata.NewClient(&http.Client{})
+
+	project_id, err := client.ProjectID()
+	if err != nil {
+		return "", err
+	}
+
+	return project_id, nil
+}
+
 func main() {
 
 	var (
-		// Default port added to https://github.com/prometheus/prometheus/wiki/Default-port-allocations
-		gcpProjectID   = kingpin.Arg("gcp_project_id", "ID of Google Project to be monitored.").Required().String()
-		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
-		metricsPath    = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
-		gcpCredentials = kingpin.Flag("gcp.credentials-path", "Path to Google Cloud Platform credentials json file.").Default("credentials.json").String()
-		basePath       = kingpin.Flag("test.base-path", "Change the default googleapis URL (for testing purposes only).").Default("").String()
+		listenAddress = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
+		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
+		basePath      = kingpin.Flag("test.base-path", "Change the default googleapis URL (for testing purposes only).").Default("").String()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
@@ -117,7 +160,17 @@ func main() {
 	log.Infoln("Starting gcp_quota_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
 
-	exporter, err := NewExporter(*gcpCredentials, *gcpProjectID)
+	// Detect Project ID
+	if *gcpProjectID == "" {
+		project_id, err := GetProjectIdFromMetadata()
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		*gcpProjectID = project_id
+	}
+
+	exporter, err := NewExporter(*gcpProjectID)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -129,6 +182,7 @@ func main() {
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
+	log.Infoln("Google Project: ", *gcpProjectID)
 	log.Infoln("Listening on", *listenAddress)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
