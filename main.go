@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
@@ -53,6 +56,11 @@ type Exporter struct {
 	service *compute.Service
 	project string
 	mutex   sync.RWMutex
+}
+
+// GCP service account keys contain the Project ID
+type ServiceAccount struct {
+	ProjectId string `json:"project_id"`
 }
 
 // scrape connects to the Google API to retreive quota statistics and record them as metrics.
@@ -162,12 +170,31 @@ func main() {
 
 	// Detect Project ID
 	if *gcpProjectID == "" {
-		project_id, err := GetProjectIdFromMetadata()
-		if err != nil {
-			log.Fatal(err)
-		}
+		credentialsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-		*gcpProjectID = project_id
+		if credentialsFile != "" {
+			var svc ServiceAccount
+
+			c, err := ioutil.ReadFile(credentialsFile)
+			if err != nil {
+				log.Fatalf("Unable to read %s: %v", credentialsFile, err)
+			}
+
+			json.Unmarshal(c, &svc)
+
+			if svc.ProjectId == "" {
+				log.Fatalf("Could retrieve project ID from %s", credentialsFile)
+			}
+
+			*gcpProjectID = svc.ProjectId
+		} else {
+			project_id, err := GetProjectIdFromMetadata()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			*gcpProjectID = project_id
+		}
 	}
 
 	exporter, err := NewExporter(*gcpProjectID)
@@ -182,7 +209,7 @@ func main() {
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
-	log.Infoln("Google Project: ", *gcpProjectID)
+	log.Infoln("Google Project:", *gcpProjectID)
 	log.Infoln("Listening on", *listenAddress)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
