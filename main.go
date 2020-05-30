@@ -59,7 +59,7 @@ type Exporter struct {
 }
 
 // GCP service account keys contain the Project ID
-type ServiceAccount struct {
+type ServiceAccountFile struct {
 	ProjectId string `json:"project_id"`
 }
 
@@ -173,7 +173,7 @@ func main() {
 		credentialsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 		if credentialsFile != "" {
-			var svc ServiceAccount
+			var svc ServiceAccountFile
 
 			c, err := ioutil.ReadFile(credentialsFile)
 			if err != nil {
@@ -183,7 +183,7 @@ func main() {
 			json.Unmarshal(c, &svc)
 
 			if svc.ProjectId == "" {
-				log.Fatalf("Could retrieve project ID from %s", credentialsFile)
+				log.Fatalf("Could not retrieve Project ID from %s", credentialsFile)
 			}
 
 			*gcpProjectID = svc.ProjectId
@@ -195,6 +195,10 @@ func main() {
 
 			*gcpProjectID = project_id
 		}
+	}
+
+	if *gcpProjectID == "" {
+		log.Fatal("GCP Project ID cannot be empty")
 	}
 
 	exporter, err := NewExporter(*gcpProjectID)
