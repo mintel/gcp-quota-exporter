@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -19,6 +18,8 @@ import (
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 	"gopkg.in/alecthomas/kingpin.v2"
+
+	"github.com/tidwall/gjson"
 )
 
 var (
@@ -56,11 +57,6 @@ type Exporter struct {
 	service *compute.Service
 	project string
 	mutex   sync.RWMutex
-}
-
-// GCP service account keys contain the Project ID
-type ServiceAccountFile struct {
-	ProjectId string `json:"project_id"`
 }
 
 // scrape connects to the Google API to retreive quota statistics and record them as metrics.
@@ -173,20 +169,18 @@ func main() {
 		credentialsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 		if credentialsFile != "" {
-			var svc ServiceAccountFile
-
 			c, err := ioutil.ReadFile(credentialsFile)
 			if err != nil {
 				log.Fatalf("Unable to read %s: %v", credentialsFile, err)
 			}
 
-			json.Unmarshal(c, &svc)
+			projectId := gjson.GetBytes(c, "project_id")
 
-			if svc.ProjectId == "" {
+			if projectId.String() == "" {
 				log.Fatalf("Could not retrieve Project ID from %s", credentialsFile)
 			}
 
-			*gcpProjectID = svc.ProjectId
+			*gcpProjectID = projectId.String()
 		} else {
 			project_id, err := GetProjectIdFromMetadata()
 			if err != nil {
