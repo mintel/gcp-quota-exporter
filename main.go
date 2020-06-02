@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"net/http"
+	"os"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
@@ -16,6 +18,8 @@ import (
 	"google.golang.org/api/compute/v1"
 	"google.golang.org/api/option"
 	"gopkg.in/alecthomas/kingpin.v2"
+
+	"github.com/tidwall/gjson"
 )
 
 var (
@@ -162,12 +166,33 @@ func main() {
 
 	// Detect Project ID
 	if *gcpProjectID == "" {
-		project_id, err := GetProjectIdFromMetadata()
-		if err != nil {
-			log.Fatal(err)
-		}
+		credentialsFile := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-		*gcpProjectID = project_id
+		if credentialsFile != "" {
+			c, err := ioutil.ReadFile(credentialsFile)
+			if err != nil {
+				log.Fatalf("Unable to read %s: %v", credentialsFile, err)
+			}
+
+			projectId := gjson.GetBytes(c, "project_id")
+
+			if projectId.String() == "" {
+				log.Fatalf("Could not retrieve Project ID from %s", credentialsFile)
+			}
+
+			*gcpProjectID = projectId.String()
+		} else {
+			project_id, err := GetProjectIdFromMetadata()
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			*gcpProjectID = project_id
+		}
+	}
+
+	if *gcpProjectID == "" {
+		log.Fatal("GCP Project ID cannot be empty")
 	}
 
 	exporter, err := NewExporter(*gcpProjectID)
@@ -182,7 +207,7 @@ func main() {
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
-	log.Infoln("Google Project: ", *gcpProjectID)
+	log.Infoln("Google Project:", *gcpProjectID)
 	log.Infoln("Listening on", *listenAddress)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
