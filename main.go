@@ -71,7 +71,7 @@ func (e *Exporter) scrape() (up float64, prj *compute.Project, rgl *compute.Regi
 	regionList, err := e.service.Regions.List(e.project).Do()
 	if err != nil {
 		log.Errorf("Failure when querying region quotas: %v", err)
-		return 0, nil, nil
+		return 0, project, nil
 	}
 
 	return 1, project, regionList
@@ -91,16 +91,20 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 
 	up, project, regionList := e.scrape()
 
-	for _, quota := range project.Quotas {
-		ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
-		ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, "", quota.Metric)
+	if project != nil {
+		for _, quota := range project.Quotas {
+			ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
+			ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, "", quota.Metric)
+		}
 	}
 
-	for _, region := range regionList.Items {
-		regionName := region.Name
-		for _, quota := range region.Quotas {
-			ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, regionName, quota.Metric)
-			ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, regionName, quota.Metric)
+	if regionList != nil {
+		for _, region := range regionList.Items {
+			regionName := region.Name
+			for _, quota := range region.Quotas {
+				ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, regionName, quota.Metric)
+				ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, regionName, quota.Metric)
+			}
 		}
 	}
 
