@@ -23,9 +23,10 @@ import (
 )
 
 var (
-	limitDesc = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
-	usageDesc = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
-	upDesc    = prometheus.NewDesc("up", "Was the last scrape of the Google API successful.", nil, nil)
+	limitDesc          = prometheus.NewDesc("gcp_quota_limit", "quota limits for GCP components", []string{"project", "region", "metric"}, nil)
+	usageDesc          = prometheus.NewDesc("gcp_quota_usage", "quota usage for GCP components", []string{"project", "region", "metric"}, nil)
+	projectQuotaUpDesc = prometheus.NewDesc("gcp_quota_project_up", "Was the last scrape of the Google Project API successful.", nil, nil)
+	regionsQuotaUpDesc = prometheus.NewDesc("gcp_quota_regions_up", "Was the last scrape of the Google Regions API successful.", nil, nil)
 
 	gcpProjectID = kingpin.Flag(
 		"gcp.project_id", "ID of the Google Project to be monitored. ($GOOGLE_PROJECT_ID)",
@@ -60,21 +61,21 @@ type Exporter struct {
 }
 
 // scrape connects to the Google API to retreive quota statistics and record them as metrics.
-func (e *Exporter) scrape() (up float64, prj *compute.Project, rgl *compute.RegionList) {
+func (e *Exporter) scrape() (prj *compute.Project, rgl *compute.RegionList) {
 
 	project, err := e.service.Projects.Get(e.project).Do()
 	if err != nil {
 		log.Errorf("Failure when querying project quotas: %v", err)
-		return 0, nil, nil
+		project = nil
 	}
 
 	regionList, err := e.service.Regions.List(e.project).Do()
 	if err != nil {
 		log.Errorf("Failure when querying region quotas: %v", err)
-		return 0, project, nil
+		regionList = nil
 	}
 
-	return 1, project, regionList
+	return project, regionList
 }
 
 // Describe is implemented with DescribeByCollect. That's possible because the
@@ -89,13 +90,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	e.mutex.Lock() // To protect metrics from concurrent collects.
 	defer e.mutex.Unlock()
 
-	up, project, regionList := e.scrape()
+	project, regionList := e.scrape()
 
 	if project != nil {
 		for _, quota := range project.Quotas {
 			ch <- prometheus.MustNewConstMetric(limitDesc, prometheus.GaugeValue, quota.Limit, e.project, "", quota.Metric)
 			ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, "", quota.Metric)
 		}
+		ch <- prometheus.MustNewConstMetric(projectQuotaUpDesc, prometheus.GaugeValue, 1)
+	} else {
+		ch <- prometheus.MustNewConstMetric(projectQuotaUpDesc, prometheus.GaugeValue, 0)
 	}
 
 	if regionList != nil {
@@ -106,9 +110,11 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 				ch <- prometheus.MustNewConstMetric(usageDesc, prometheus.GaugeValue, quota.Usage, e.project, regionName, quota.Metric)
 			}
 		}
+		ch <- prometheus.MustNewConstMetric(regionsQuotaUpDesc, prometheus.GaugeValue, 1)
+	} else {
+		ch <- prometheus.MustNewConstMetric(regionsQuotaUpDesc, prometheus.GaugeValue, 0)
 	}
 
-	ch <- prometheus.MustNewConstMetric(upDesc, prometheus.GaugeValue, up)
 }
 
 // NewExporter returns an initialised Exporter.
