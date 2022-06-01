@@ -12,7 +12,10 @@ import (
 	"github.com/PuerkitoBio/rehttp"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/log"
+	"github.com/go-kit/log/level"
+	"github.com/go-kit/log"
+	promlogflag "github.com/prometheus/common/promlog/flag"
+	promlog "github.com/prometheus/common/promlog"
 	"github.com/prometheus/common/version"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/compute/v1"
@@ -58,6 +61,7 @@ type Exporter struct {
 	service *compute.Service
 	project string
 	mutex   sync.RWMutex
+	logger  log.Logger
 }
 
 // scrape connects to the Google API to retreive quota statistics and record them as metrics.
@@ -65,13 +69,13 @@ func (e *Exporter) scrape() (prj *compute.Project, rgl *compute.RegionList) {
 
 	project, err := e.service.Projects.Get(e.project).Do()
 	if err != nil {
-		log.Errorf("Failure when querying project quotas: %v", err)
+		level.Error(e.logger).Log("msg", "Failure when querying project quotas", "error", err)
 		project = nil
 	}
 
 	regionList, err := e.service.Regions.List(e.project).Do()
 	if err != nil {
-		log.Errorf("Failure when querying region quotas: %v", err)
+		level.Error(e.logger).Log("msg", "Failure when querying region quotas", "error", err)
 		regionList = nil
 	}
 
@@ -118,7 +122,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 }
 
 // NewExporter returns an initialised Exporter.
-func NewExporter(project string) (*Exporter, error) {
+func NewExporter(project string, logger log.Logger) (*Exporter, error) {
 	// Create context and generate compute.Service
 	ctx := context.Background()
 
@@ -138,12 +142,14 @@ func NewExporter(project string) (*Exporter, error) {
 
 	computeService, err := compute.NewService(ctx, option.WithHTTPClient(googleClient))
 	if err != nil {
-		log.Fatalf("Unable to create service: %v", err)
+		level.Error(logger).Log("Unable to create service", "err", err)
+		os.Exit(1)
 	}
 
 	return &Exporter{
 		service: computeService,
 		project: project,
+		logger: logger,
 	}, nil
 }
 
@@ -164,15 +170,19 @@ func main() {
 		listenAddress = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9592").String()
 		metricsPath   = kingpin.Flag("web.telemetry-path", "Path under which to expose metrics.").Default("/metrics").String()
 		basePath      = kingpin.Flag("test.base-path", "Change the default googleapis URL (for testing purposes only).").Default("").String()
+		promlogConfig promlog.Config
 	)
 
-	log.AddFlags(kingpin.CommandLine)
+
+	promlogflag.AddFlags(kingpin.CommandLine, &promlogConfig)
 	kingpin.Version(version.Print("gcp_quota_exporter"))
 	kingpin.HelpFlag.Short('h')
 	kingpin.Parse()
 
-	log.Infoln("Starting gcp_quota_exporter", version.Info())
-	log.Infoln("Build context", version.BuildContext())
+	logger := promlog.New(&promlogConfig)
+
+	level.Info(logger).Log("msg", "Starting gcp_quota_exporter", "version", version.Info())
+	level.Info(logger).Log("Build Context", version.BuildContext())
 
 	// Detect Project ID
 	if *gcpProjectID == "" {
@@ -181,20 +191,24 @@ func main() {
 		if credentialsFile != "" {
 			c, err := ioutil.ReadFile(credentialsFile)
 			if err != nil {
-				log.Fatalf("Unable to read %s: %v", credentialsFile, err)
+				level.Error(logger).Log("msg", "Unable to read credentials file",
+					"file", credentialsFile, "error", err)
+				os.Exit(1)
 			}
 
 			projectId := gjson.GetBytes(c, "project_id")
 
 			if projectId.String() == "" {
-				log.Fatalf("Could not retrieve Project ID from %s", credentialsFile)
+				level.Error(logger).Log("msg", "Could not retrieve Project ID from credentials file", "file", credentialsFile)
+				os.Exit(1)
 			}
 
 			*gcpProjectID = projectId.String()
 		} else {
 			project_id, err := GetProjectIdFromMetadata()
 			if err != nil {
-				log.Fatal(err)
+				level.Error(logger).Log("error", err)
+				os.Exit(1)
 			}
 
 			*gcpProjectID = project_id
@@ -202,12 +216,14 @@ func main() {
 	}
 
 	if *gcpProjectID == "" {
-		log.Fatal("GCP Project ID cannot be empty")
+		level.Error(logger).Log("msg", "GCP Project ID cannot be empty")
+		os.Exit(1)
 	}
 
-	exporter, err := NewExporter(*gcpProjectID)
+	exporter, err := NewExporter(*gcpProjectID, logger)
 	if err != nil {
-		log.Fatal(err)
+		level.Error(logger).Log("error", err)
+		os.Exit(1)
 	}
 
 	if *basePath != "" {
@@ -217,8 +233,8 @@ func main() {
 	prometheus.MustRegister(exporter)
 	prometheus.MustRegister(version.NewCollector("gcp_quota_exporter"))
 
-	log.Infoln("Google Project:", *gcpProjectID)
-	log.Infoln("Listening on", *listenAddress)
+	level.Info(logger).Log("Google Project", *gcpProjectID)
+	level.Info(logger).Log("msg", "Listening", "address", *listenAddress)
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`<html>
@@ -229,6 +245,6 @@ func main() {
              </body>
              </html>`))
 	})
-	log.Fatal(http.ListenAndServe(*listenAddress, nil))
-
+	err = http.ListenAndServe(*listenAddress, nil)
+	level.Error(logger).Log("error", err)
 }
