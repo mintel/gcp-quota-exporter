@@ -247,4 +247,5 @@ func main() {
 	})
 	err = http.ListenAndServe(*listenAddress, nil)
 	level.Error(logger).Log("error", err)
+	os.Exit(1)
 }
